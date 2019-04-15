@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: tensorflow-wk-rc-gpu
+  namespace: dwj
+spec:
+  replicas: 2
+  selector:
+    name: tensorflow-worker-gpu
+  template:
+    metadata:
+      labels:
+        name: tensorflow-worker-gpu
+        role: worker-gpu
+    spec:
+      containers:
+        - name: worker-gpu
+          image: tensorflow/tensorflow:1.13.1-gpu-py3-jupyter
+          ports:
+            - containerPort: 2222
+#          resources:
+#            limits:
+#              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: nfs-storage
+              mountPath: /tf/shared
+      volumes:
+        - name: nfs-storage
+          nfs:
+            server: 10.244.1.0
+            path: "/home/dwj_temp/shared"
