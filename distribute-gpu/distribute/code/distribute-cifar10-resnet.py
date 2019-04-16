@@ -14,7 +14,7 @@ import resnet_model
 
 #cifar-10
 FLAGS = None
-batch_size=512
+batch_size=128
 def _my_input_fn(filenames, num_epochs):
     image_bytes = 32 * 32 * 3
     label_bytes = 1
@@ -45,6 +45,7 @@ def _my_input_fn(filenames, num_epochs):
             tf.float32)
         train_image = tf.image.per_image_standardization(train_image_pre3)
         train_image.set_shape([32, 32, 3])
+        tf.summary.image('image',train_image)
         """ convert label : (ex) 2 -> (0.0, 0.0, 1.0, 0.0, ...) """
         train_label = tf.sparse_to_dense(train_label, [10], 1.0, 0.0)
         return train_image, train_label
@@ -98,17 +99,18 @@ def _my_model_fn(features, labels, mode):
         features,
         labels,
         'train')
+    tf.summary.image('image',features)
     train_model.build_graph()
 
     # create evaluation metrices
     """ Please umcomment """
     """ when you output precision and accuracy to TensorBoard or use INFER """
-    #truth = tf.argmax(train_model.labels, axis=1)
-    #predictions = tf.argmax(train_model.predictions, axis=1)
-    #precision = tf.reduce_mean(tf.to_float(tf.equal(predictions, truth)))
-    #accuracy = tf.metrics.accuracy(truth, predictions)
-    #tf.summary.scalar('precision', precision) # output to TensorBoard
-    #tf.summary.scalar('accuracy', accuracy[1]) # output to TensorBoard
+    truth = tf.argmax(train_model.labels, axis=1)
+    predictions = tf.argmax(train_model.predictions, axis=1)
+    precision = tf.reduce_mean(tf.to_float(tf.equal(predictions, truth)))
+    accuracy = tf.metrics.accuracy(truth, predictions)
+    tf.summary.scalar('precision', precision) # output to TensorBoard
+    tf.summary.scalar('accuracy', accuracy[1]) # output to TensorBoard
 
     # define operations
     if mode == tf.estimator.ModeKeys.TRAIN:
@@ -207,7 +209,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--out_dir',
         type=str,
-        default=r'../out',
+        default=r'../out128_image',
         help='Dir path for model output.')    
     parser.add_argument(
         '--num_parallel_calls',
