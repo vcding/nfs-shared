@@ -7,7 +7,7 @@ import os
 import argparse
 import math
 import numpy as np
-
+import time
 import tensorflow as tf
 
 import resnet_model
@@ -130,6 +130,7 @@ def _my_model_fn(features, labels, mode):
             def after_run(self, run_context, run_values):
                 if run_values.results[0] % 10 == 0: # log output every 10 steps
                     print('step:%d  loss:%.2f' % (run_values.results[0], run_values.results[1]))
+  
         return tf.estimator.EstimatorSpec(
             mode,
             loss=train_model.cost,
@@ -176,7 +177,7 @@ def main(_):
     train_spec = tf.estimator.TrainSpec(
         input_fn=_get_train_input_fn(FLAGS.train_dir, 10),
         #max_steps=50000 * 10 // batch_size) # Full spec
-        max_steps=5000) # For benchmarking
+        max_steps=50) # For benchmarking
         #max_steps=1000) # For seminar
     eval_spec = tf.estimator.EvalSpec(
         input_fn=_get_eval_input_fn(FLAGS.test_file, 1),
@@ -209,7 +210,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--out_dir',
         type=str,
-        default=r'../out128_image',
+        default=r'../out128_zzh',
         help='Dir path for model output.')    
     parser.add_argument(
         '--num_parallel_calls',
