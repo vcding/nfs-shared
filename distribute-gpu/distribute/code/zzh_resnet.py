@@ -4,18 +4,23 @@ from __future__ import print_function
 
 import sys
 import os
+import csv
 import argparse
 import math
 import numpy as np
 import time
 import tensorflow as tf
-
+import json
 import resnet_model
+import zzh_file
+
 
 #cifar-10
 FLAGS = None
 batch_size=128
 min_loss=0.6
+tf_config = json.loads(os.environ.get('TF_CONFIG', '{}'))
+
 def _my_input_fn(filenames, num_epochs):
     image_bytes = 32 * 32 * 3
     label_bytes = 1
@@ -112,7 +117,7 @@ def _my_model_fn(features, labels, mode):
     accuracy = tf.metrics.accuracy(truth, predictions)
     tf.summary.scalar('precision', precision) # output to TensorBoard
     tf.summary.scalar('accuracy', accuracy[1]) # output to TensorBoard
-
+    
     # define operations
     if mode == tf.estimator.ModeKeys.TRAIN:
         """ We don't use tf.train.LoggingTensorHook because it doesn't work when distributed tensorflow. """
@@ -125,47 +130,73 @@ def _my_model_fn(features, labels, mode):
         #    },
         #    every_n_iter=10) # log output every 10 steps
         class _CustomLogHook(tf.train.SessionRunHook):
-            '''def before_run(self, run_context):
-                return tf.train.SessionRunArgs(
-                    fetches = [train_model.global_step, train_model.cost])
-            def after_run(self, run_context, run_values):
-                if run_values.results[0] % 10 == 0: # log output every 10 steps
-                    print('step:%d  loss:%.2f' % (run_values.results[0], run_values.results[1]))'''
             ''' zzh 添加打印信息 '''
             def begin(self):
-                self._step = -1
                 self._all_time = 0
-
+                self._stop_flag = 0
+                self.stop_flag_record = []
+                
             def before_run(self, run_context):
-                self._step += 1
                 self._step_start_time = time.time()
                 return tf.train.SessionRunArgs(
-                    fetches=[train_model.global_step, train_model.cost])
+                    fetches=[train_model.global_step, train_model.cost, accuracy])
 
             def after_run(self, run_context, run_values):
-                current_time = time.time()
-                self._all_time += (current_time - self._step_start_time)
-                # print("step: [%d]   loss: %.2f  sec(%.3f)" %(global_step, run_values.results[1], current_time - self._step_start_time))
-                if run_values.results[1] <= min_loss:
-                    print("the train will be finished, the loss is : [%.2f], steps is : [%d], cost time is : [%.3f]" %(run_values.results[1], run_values.results[0], self._all_time))
-                    run_context.request_stop()
-                if run_values.results[0] % 10 == 0:  # log output every 10 steps
-                     print('step:%d  loss:%.2f' % (run_values.results[0], run_values.results[1]))
+                loss = run_values.results[1]
+                steps = run_values.results[0]
+                acc = run_values.results[2][1]
+                self._all_time += (time.time() - self._step_start_time)
+
+                '''
+                    当损失函数小于设定值时，_stop_flag ++
+                    必须保证是连续小于设定
+                '''
+                if loss <= min_loss:
+                    self._stop_flag += 1
+                else:
+                    self._stop_flag = 0
+                    self.stop_flag_record = []
+
+                '''
+                    假设连续五十次小于设定值，认为其已经达到目标状态
+                    当worker 达到了目标  则新建文件 stop_flag_worker
+                    当chief也到达了目标时  也会新建文件 stop_flag_chief
+                '''
+                if self._stop_flag == 50:
+                    zzh_file.write_stop_flag(tf_config['task']['type'])
+
+                if self._stop_flag >= 10:
+                    step_time = time.strftime("%y/%m/%d %H:%M:%S")
+                    role = tf_config['task']['type']
+                    self.stop_flag_record.append([step_time, steps,role, loss, acc, self._all_time, self._stop_flag])
+                    if(self._stop_flag >50 and self._stop_flag % 10 == 0):
+                        ''' 当检测到对方已经达到目标时 则将保存下的step状态信息写入到 csv 表格中 '''
+                        if zzh_file.get_stop_flag(tf_config['task']['type']):
+                            zzh_file.write_csv_file(self.stop_flag_record)
+                            self.stop_flag_record = []
+                        else:
+                            print(self._stop_flag, steps, zzh_file.get_stop_flag(tf_config['task']['type']))
+                    # run_context.request_stop()
+                if run_values.results[0] % 50 == 0:  # log output every 10 steps
+                    print('\033[34mstep:\033[37m[%d]  \033[34mloss:\033[37m[%.2f]\033[34m accuracy:\033[37m[%.4f]\033[0m' %(steps, loss ,acc))
 
         return tf.estimator.EstimatorSpec(
             mode,
             loss=train_model.cost,
             train_op=train_model.train_op,
             #training_chief_hooks=[logging_hook])
-            training_chief_hooks=[_CustomLogHook()])
+            training_hooks=[_CustomLogHook()])
     if mode == tf.estimator.ModeKeys.EVAL:
         eval_metric_ops = {
 #            'accuracy': accuracy
         }
+        print("-------------------------EVAL")
         return tf.estimator.EstimatorSpec(
             mode,
             loss=train_model.cost,
             eval_metric_ops=eval_metric_ops)
+    if mode == tf.estimator.ModeKeys.PREDICT:
+        print("-------------------------PREDICT")
     """ Please umcomment when you use INFER """
     #if mode == tf.estimator.ModeKeys.INFER:
     #    probabilities = tf.nn.softmax(train_model.predictions, name='softmax_tensor')
@@ -189,7 +220,6 @@ def main(_):
                             gpu_options = gpu_options)
     run_config.gpu_options.allow_growth = True
     run_config = tf.contrib.learn.RunConfig()
- 
     # define
     cifar10_resnet_classifier = tf.estimator.Estimator(
         model_fn=_my_model_fn,
@@ -198,7 +228,7 @@ def main(_):
     train_spec = tf.estimator.TrainSpec(
         input_fn=_get_train_input_fn(FLAGS.train_dir, 10),
         #max_steps=50000 * 10 // batch_size) # Full spec
-        max_steps=5000 * 10) # For benchmarking
+        max_steps=1000 * 10) # For benchmarking
         #max_steps=1000) # For seminar
     eval_spec = tf.estimator.EvalSpec(
         input_fn=_get_eval_input_fn(FLAGS.test_file, 1),
@@ -219,10 +249,11 @@ def main(_):
 def dany_bath_size_main(p_bath_size):
     global batch_size
     batch_size = p_bath_size
-    print("--------------------------------------------------------")
-    print("Now we will start train with the bath_size is : [%d]" %batch_size)
-    print("--------------------------------------------------------")
-
+    print("\033[37m--------------------------------------------------------\033[0m")
+    print("\033[37mNow we will start train with the bath_size is : [%d]\033[0m" %batch_size)
+    print("\033[37m--------------------------------------------------------\033[0m")
+    zzh_file.clear_csv_file()
+    
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '--train_dir',
@@ -237,30 +268,28 @@ def dany_bath_size_main(p_bath_size):
     parser.add_argument(
         '--out_dir',
         type=str,
-        default=(r'../zzh_out/bath_' + str(batch_size)),
+        default=(r'../test/batch_' + str(batch_size)),
         help='Dir path for model output.')    
     parser.add_argument(
         '--num_parallel_calls',
         type=int,
-        default=28,
+        default=4,
         help='the number of cpu.') 
     #parser.add_argument(
     #    '--use_gpu',
     #    action='store_true')
     global FLAGS
     FLAGS, unparsed = parser.parse_known_args()
+    tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)  
  
-    tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
-
 if __name__ == "__main__":
-    print("--------------------------------------------------------")
-    print(" /$$$$$$$$ /$$$$$$$$ /$$   /$$       /$$   /$$ /$$$$$$$")       
-    print("|_____ $$ |_____ $$ | $$  | $$      | $$$ | $$| $$__  $$")      
-    print("     /$$/      /$$/ | $$  | $$      | $$$$| $$| $$  \ $$ ")     
-    print("    /$$/      /$$/  | $$$$$$$$      | $$ $$ $$| $$$$$$$ ")      
-    print("   /$$/      /$$/   | $$__  $$      | $$  $$$$| $$__  $$ ")     
-    print("  /$$/      /$$/    | $$  | $$      | $$\  $$$| $$  \ $$ ")     
-    print(" /$$$$$$$$ /$$$$$$$$| $$  | $$      | $$ \  $$| $$$$$$$/  ")    
-    print("|________/|________/|__/  |__/      |__/  \__/|_______/  )")
-    dany_bath_size_main(64)
-    dany_bath_size_main(128)    
+    print("\033[37m--------------------------------------------------------\033[0m")
+    print("\033[31m /$$$$$$$$ /$$$$$$$$ /$$   /$$       /$$   /$$ /$$$$$$$\033[0m")       
+    print("\033[31m|_____ $$ |_____ $$ | $$  | $$      | $$$ | $$| $$__  $$\033[0m")      
+    print("\033[31m     /$$/      /$$/ | $$  | $$      | $$$$| $$| $$  \ $$ \033[0m")     
+    print("\033[31m    /$$/      /$$/  | $$$$$$$$      | $$ $$ $$| $$$$$$$ \033[0m")      
+    print("\033[31m   /$$/      /$$/   | $$__  $$      | $$  $$$$| $$__  $$ \033[0m")     
+    print("\033[31m  /$$/      /$$/    | $$  | $$      | $$\  $$$| $$  \ $$ \033[0m")     
+    print("\033[31m /$$$$$$$$ /$$$$$$$$| $$  | $$      | $$ \  $$| $$$$$$$/  \033[0m")    
+    print("\033[31m|________/|________/|__/  |__/      |__/  \__/|_______/  \033[0m")
+    dany_bath_size_main(128)

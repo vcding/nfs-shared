@@ -10,6 +10,9 @@ from collections import namedtuple
 import numpy as np
 import tensorflow as tf
 import six
+import os
+
+#os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 from tensorflow.python.training import moving_averages
 
@@ -33,15 +36,18 @@ class ResNet(object):
     self._images = images
     self.labels = labels
     self.mode = mode
+    #print('mode is :',self.mode)
 
     self._extra_train_ops = []
 
   def build_graph(self, tpu_opt=False):
     """Build a whole graph for the model."""
+    
     self.global_step = tf.train.get_or_create_global_step()
     self._build_model()
     if self.mode == 'train':
       self._build_train_op(tpu_opt)
+      print('%% enter if self.mode == train.')
     """ Comment out for TPU execution """
     #self.summaries = tf.summary.merge_all()
 
@@ -134,7 +140,7 @@ class ResNet(object):
     if self.hps.optimizer == 'sgd':
       optimizer = tf.train.GradientDescentOptimizer(self.lrn_rate)
     elif self.hps.optimizer == 'mom':
-      optimizer = tf.train.MomentumOptimizer(self.lrn_rate, 0.9)
+      optimizer = tf.train.MomentumOptimizer(self.lrn_rate, 0.7)
     # Added for TPU cross shared optimizer for replicas
     if tpu_opt:
       optimizer = tpu_optimizer.CrossShardOptimizer(optimizer)
@@ -170,7 +176,7 @@ class ResNet(object):
             'moving_variance', params_shape, tf.float32,
             initializer=tf.constant_initializer(1.0, tf.float32),
             trainable=False)
-
+        #batch_normalization
         self._extra_train_ops.append(moving_averages.assign_moving_average(
             moving_mean, mean, 0.9))
         self._extra_train_ops.append(moving_averages.assign_moving_average(
@@ -198,20 +204,20 @@ class ResNet(object):
     """Residual unit with 2 sub layers."""
     if activate_before_residual:
       with tf.variable_scope('shared_activation'):
-        x = self._batch_norm('init_bn', x)
+        #x = self._batch_norm('init_bn', x)
         x = self._relu(x, self.hps.relu_leakiness)
         orig_x = x
     else:
       with tf.variable_scope('residual_only_activation'):
         orig_x = x
-        x = self._batch_norm('init_bn', x)
+        #x = self._batch_norm('init_bn', x)
         x = self._relu(x, self.hps.relu_leakiness)
 
     with tf.variable_scope('sub1'):
       x = self._conv('conv1', x, 3, in_filter, out_filter, stride)
 
     with tf.variable_scope('sub2'):
-      x = self._batch_norm('bn2', x)
+      #x = self._batch_norm('bn2', x)
       x = self._relu(x, self.hps.relu_leakiness)
       x = self._conv('conv2', x, 3, out_filter, out_filter, [1, 1, 1, 1])
 
@@ -231,25 +237,25 @@ class ResNet(object):
     """Bottleneck residual unit with 3 sub layers."""
     if activate_before_residual:
       with tf.variable_scope('common_bn_relu'):
-        x = self._batch_norm('init_bn', x)
+        #x = self._batch_norm('init_bn', x)
         x = self._relu(x, self.hps.relu_leakiness)
         orig_x = x
     else:
       with tf.variable_scope('residual_bn_relu'):
         orig_x = x
-        x = self._batch_norm('init_bn', x)
+        #x = self._batch_norm('init_bn', x)
         x = self._relu(x, self.hps.relu_leakiness)
 
     with tf.variable_scope('sub1'):
       x = self._conv('conv1', x, 1, in_filter, out_filter/4, stride)
 
     with tf.variable_scope('sub2'):
-      x = self._batch_norm('bn2', x)
+      #x = self._batch_norm('bn2', x)
       x = self._relu(x, self.hps.relu_leakiness)
       x = self._conv('conv2', x, 3, out_filter/4, out_filter/4, [1, 1, 1, 1])
 
     with tf.variable_scope('sub3'):
-      x = self._batch_norm('bn3', x)
+      #x = self._batch_norm('bn3', x)
       x = self._relu(x, self.hps.relu_leakiness)
       x = self._conv('conv3', x, 1, out_filter/4, out_filter, [1, 1, 1, 1])
 
